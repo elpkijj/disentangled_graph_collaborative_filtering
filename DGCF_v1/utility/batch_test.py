@@ -28,7 +28,7 @@ if args.dataset=='amazon-book':
     BATCH_SIZE = args.batch_size//4
 else:
     BATCH_SIZE = args.batch_size
-
+# 使用堆排序快速计算top k推荐列表
 def ranklist_by_heapq(user_pos_test, test_items, rating, Ks):
     item_score = {}
     for i in test_items:

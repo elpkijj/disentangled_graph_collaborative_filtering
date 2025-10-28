@@ -52,12 +52,13 @@ class Data(object):
         self.n_users += 1
 
         self.print_statistics()
-
+        # 创建一个用户数*物品数的稀疏矩阵存储用户和物品之间的交互关系
         self.R = sp.dok_matrix((self.n_users, self.n_items), dtype=np.float32)
 
         self.train_items, self.test_set = {}, {}
         with open(train_file) as f_train:
             with open(test_file) as f_test:
+                # 训练数据处理
                 for l in f_train.readlines():
                     if len(l) == 0: break
                     l = l.strip('\n')
@@ -65,11 +66,12 @@ class Data(object):
                     uid, train_items = items[0], items[1:]
 
                     for i in train_items:
+                        # 交互矩阵中有交互的位置置为1
                         self.R[uid, i] = 1.
                         # self.R[uid][i] = 1
 
                     self.train_items[uid] = train_items
-
+                # 测试数据处理
                 for l in f_test.readlines():
                     if len(l) == 0: break
                     l = l.strip('\n')
@@ -82,6 +84,7 @@ class Data(object):
                     self.test_set[uid] = test_items
 
     def get_adj_mat(self):
+        # 加载缓存矩阵
         try:
             t1 = time()
             adj_mat = sp.load_npz(self.path + '/s_adj_mat.npz')
@@ -110,40 +113,50 @@ class Data(object):
             pre_adj_mat = norm_adj.tocsr()
             sp.save_npz(self.path + '/s_pre_adj_mat.npz', norm_adj)
 
-
+        # 返回的分别是原始邻接矩阵，带自环的归一化邻接矩阵（NGCF），均值归一化邻接矩阵（LightGCN），对称归一化邻接矩阵（GCN）
         return adj_mat, norm_adj_mat, mean_adj_mat, pre_adj_mat
 
     def create_adj_mat(self):
         t1 = time()
+        # 初始化(用户数+物品数)*(用户数+物品数)的矩阵
         adj_mat = sp.dok_matrix((self.n_users + self.n_items, self.n_users + self.n_items), dtype=np.float32)
+        # 转换成lil格式
         adj_mat = adj_mat.tolil()
         R = self.R.tolil()
 
         adj_mat[:self.n_users, self.n_users:] = R
         adj_mat[self.n_users:, :self.n_users] = R.T
+        # 从lil格式转回dok格式
         adj_mat = adj_mat.todok()
         print('already create adjacency matrix', adj_mat.shape, time() - t1)
 
         t2 = time()
 
         def normalized_adj_single(adj):
+            # 计算每行的和（节点的度）
             rowsum = np.array(adj.sum(1))
-
+            # 计算度的倒数
             d_inv = np.power(rowsum, -1).flatten()
+            # 找到度为0的位置将这些位置设为0
             d_inv[np.isinf(d_inv)] = 0.
+            # 用度倒数创建对角矩阵
             d_mat_inv = sp.diags(d_inv)
-
+            # 对角矩阵左乘邻接矩阵
             norm_adj = d_mat_inv.dot(adj)
             # norm_adj = adj.dot(d_mat_inv)
             print('generate single-normalized adjacency matrix.')
+            # 转化成coo格式
             return norm_adj.tocoo()
 
         def check_adj_if_equal(adj):
+            # 转换成稠密矩阵
             dense_A = np.array(adj.todense())
+            # 计算每行的核
             degree = np.sum(dense_A, axis=1, keepdims=False)
 
             temp = np.dot(np.diag(np.power(degree, -1)), dense_A)
             print('check normalized adjacency matrix whether equal to this laplacian matrix.')
+            # 用来判断稠密矩阵和稀疏矩阵结果是否一致
             return temp
 
         norm_adj_mat = normalized_adj_single(adj_mat + sp.eye(adj_mat.shape[0]))
@@ -151,7 +164,7 @@ class Data(object):
 
         print('already normalize adjacency matrix', time() - t2)
         return adj_mat.tocsr(), norm_adj_mat.tocsr(), mean_adj_mat.tocsr()
-
+    # 负样本池，DiffCL不用这个
     def negative_pool(self):
         t1 = time()
         for u in self.train_items.keys():
@@ -160,13 +173,14 @@ class Data(object):
             self.neg_pools[u] = pools
         print('refresh negative pools', time() - t1)
 
+    # 采样一个批次的用户
     def sample(self):
         if self.batch_size <= self.n_users:
             users = rd.sample(self.exist_users, self.batch_size)
         else:
             users = [rd.choice(self.exist_users) for _ in range(self.batch_size)]
 
-
+        # 为用户采样正样本
         def sample_pos_items_for_u(u, num):
             pos_items = self.train_items[u]
             n_pos_items = len(pos_items)
@@ -179,7 +193,7 @@ class Data(object):
                 if pos_i_id not in pos_batch:
                     pos_batch.append(pos_i_id)
             return pos_batch
-
+        # 为用户采样负样本
         def sample_neg_items_for_u(u, num):
             neg_items = []
             while True:
@@ -246,7 +260,7 @@ class Data(object):
         print('n_users=%d, n_items=%d' % (self.n_users, self.n_items))
         print('n_interactions=%d' % (self.n_train + self.n_test))
         print('n_train=%d, n_test=%d, sparsity=%.5f' % (self.n_train, self.n_test, (self.n_train + self.n_test)/(self.n_users * self.n_items)))
-
+    # 根据用户的交互数量（活跃度）将用户分成不同的组，用于分析模型在不同类型用户上的表现
     def get_sparsity_split(self):
         try:
             split_uids, split_state = [], []
